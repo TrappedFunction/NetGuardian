@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "NetGuardian"
+    },
+    {
+      "name": "permission_reason_internet",
+      "value": "用于网络测速和连接检测"
+    },
+    {
+      "name": "permission_reason_network_info",
+      "value": "用于展示当前网络状态信息"
+    }
+  ]
+}

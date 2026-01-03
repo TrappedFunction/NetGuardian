@@ -1,6 +1,8 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { NetMonitorService } from '../service/NetMonitorService';
+import Logger from '../common/utils/Logger';
 
 const DOMAIN = 0x0000;
 
@@ -11,11 +13,17 @@ export default class EntryAbility extends UIAbility {
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
+    Logger.info('EntryAbility', 'onCreate');
+
+    // 【点火】启动网络监听服务
+    // 保持 Mock 模式开启 (isMockMode = true)
+    NetMonitorService.getInstance().startMonitor();
   }
 
   onDestroy(): void {
-    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
+    Logger.info('EntryAbility', 'onDestroy');
+    // 【熄火】停止服务，释放资源
+    NetMonitorService.getInstance().stopMonitor();
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {

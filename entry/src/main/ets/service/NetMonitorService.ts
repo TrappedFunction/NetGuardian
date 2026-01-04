@@ -1,7 +1,7 @@
 import connection from '@ohos.net.connection';
 import Logger from '../common/utils/Logger';
 import {NetInfoModel, DEFAULT_NET_INFO} from '../model/NetInfoModel';
-import {IpUtils} from '../common/utils/IpUtils';
+import { SpeedTestEngine } from './SpeedTestEngine';
 
 // 定义 AppStorage 的 Key，UI 组件将通过这个 Key 监听数据变化
 export const APP_STORAGE_KEY_NET_INFO = 'AppStorage_NetInfo';
@@ -18,12 +18,15 @@ export class NetMonitorService{
   // 单例实例
   private static instance: NetMonitorService;
 
+  // 实例化引擎
+  private speedEngine: SpeedTestEngine = new SpeedTestEngine();
+
   // 系统网络连接对象
   private netConnection: connection.NetConnection | null = null;
 
   // 模拟器模式开关：开发阶段置为 true，真机调试置为 false
   // TODO：后续将此开关做进“设置”页面里
-  private isMockMode: boolean = true;
+  private isMockMode: boolean = false;
   private mockTimer: number = -1;
 
   /**
@@ -50,11 +53,15 @@ export class NetMonitorService{
    * 启动监控流程
    */
   public startMonitor(): void {
+    // 这里的开关应该改为从 AppStorage 或 用户设置中读取
+    // TODO暂时先硬编码测试：isMockMode = false 表示开启真实测速
     if(this.isMockMode){
       this.startMockGenerator();
       return;
+    }else {
+      this.startRealMonitor(); // 监听连接状态
+      this.startRealSpeedTest(); // 启动测速引擎
     }
-    this.startRealMonitor();
   }
 
   /**
@@ -69,6 +76,7 @@ export class NetMonitorService{
         Logger.info('Service', 'Unregister result:', err ?? 'Success');
       });
     }
+    this.speedEngine.stopTest(); // 停止测速
   }
 
   // 监控逻辑
@@ -141,9 +149,15 @@ export class NetMonitorService{
         typeStr = 'WIFI';
       }else if(cap.bearerTypes.includes(connection.NetBearType.BEARER_CELLULAR)){
         typeStr = 'CELLULAR';
+      } else if (cap.bearerTypes.includes(connection.NetBearType.BEARER_ETHERNET)) {
+        // 适配模拟器或有线网
+        typeStr = 'ETHERNET';
+      } else {
+        // 兜底显示
+        typeStr = 'OTHER';
       }
 
-      // 组装数据模型
+        // 组装数据模型
       const netInfo: NetInfoModel = {
         ipAddress: ipStr,
         gateway: gatewayStr,
@@ -207,4 +221,34 @@ export class NetMonitorService{
     Logger.info('Service', 'Mock Data Pushed:', mockInfo);
   }
 
+  /**
+   * 启动真实测速
+   */
+  private startRealSpeedTest(){
+    Logger.info('Service', 'Starting Real Speed Engine...');
+
+    this.speedEngine.startTest((speedKbps, progress) => {
+      // 这是引擎的回调，每 500ms 触发一次
+      // 从 AppStorage 取出当前的 NetInfo，更新速度字段，再存回去
+      // AppStorage.Get 返回的也有可能是 undefined
+      let currentInfo = AppStorage.get<NetInfoModel>(APP_STORAGE_KEY_NET_INFO) || { ...DEFAULT_NET_INFO };
+
+      let newInfo: NetInfoModel = {
+        ...currentInfo,
+        linkDownSpeed: speedKbps, // 更新速度
+        isCongested: speedKbps < 100 // 阈值可以调低点方便测试
+      };
+
+      // 更新下行速度
+      currentInfo.linkDownSpeed = speedKbps;
+
+      // 如果速度超过 50Mbps (50000kbps)，认为非常流畅，否则...
+      currentInfo.isCongested = speedKbps < 2000; // 低于 2Mbps 认为拥塞
+
+      // 更新全局状态 -> UI 刷新
+      AppStorage.setOrCreate(APP_STORAGE_KEY_NET_INFO, newInfo);
+
+      Logger.debug('Service', `Real Speed: ${speedKbps} kbps, Progress: ${progress}%`);
+    })
+  }
 }

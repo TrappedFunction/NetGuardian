@@ -2,9 +2,14 @@ import connection from '@ohos.net.connection';
 import Logger from '../common/utils/Logger';
 import {NetInfoModel, DEFAULT_NET_INFO} from '../model/NetInfoModel';
 import { SpeedTestEngine } from './SpeedTestEngine';
+import { RdbManager } from '../common/database/RdbManager';
+import relationalStore from '@ohos.data.relationalStore';
+import { HISTORY_TABLE } from '../model/HistoryRecord';
 
 // 定义 AppStorage 的 Key，UI 组件将通过这个 Key 监听数据变化
 export const APP_STORAGE_KEY_NET_INFO = 'AppStorage_NetInfo';
+// 用于 Mock 模式的状态同步
+export const APP_STORAGE_KEY_IS_MOCK = 'AppStorage_IsMockMode';
 
 /**
  * 网络监控服务 (单例模式)
@@ -25,9 +30,12 @@ export class NetMonitorService{
   private netConnection: connection.NetConnection | null = null;
 
   // 模拟器模式开关：开发阶段置为 true，真机调试置为 false
-  // TODO：后续将此开关做进“设置”页面里
-  private isMockMode: boolean = false;
+  private isMockMode: boolean = true;
   private mockTimer: number = -1;
+
+  // 控制数据库写入频率
+  private lastSaveTime: number = 0;
+  private readonly SAVE_INTERVAL = 5000; // 5秒存一次
 
   /**
    * 私有构造函数，防止外部直接 new
@@ -37,6 +45,7 @@ export class NetMonitorService{
     Logger.info('Service', 'Initializing NetMonitorService...');
     // 初始化全局状态，确保 UI 绑定时有默认值
     AppStorage.setOrCreate(APP_STORAGE_KEY_NET_INFO, DEFAULT_NET_INFO);
+    AppStorage.setOrCreate(APP_STORAGE_KEY_IS_MOCK, this.isMockMode);
   }
 
   /**
@@ -53,30 +62,38 @@ export class NetMonitorService{
    * 启动监控流程
    */
   public startMonitor(): void {
-    // 这里的开关应该改为从 AppStorage 或 用户设置中读取
-    // TODO暂时先硬编码测试：isMockMode = false 表示开启真实测速
+    // 确保之前的任务都停了，防止重复启动
+    this.stopMonitor();
+
     if(this.isMockMode){
       this.startMockGenerator();
-      return;
     }else {
       this.startRealMonitor(); // 监听连接状态
       this.startRealSpeedTest(); // 启动测速引擎
     }
+
+    // 启动时执行一次陈旧数据清理
+    this.cleanOldData();
   }
 
   /**
    * 停止监控 (通常在 Ability 销毁时调用)
    */
   public stopMonitor(): void {
-    if(this.isMockMode && this.mockTimer !== -1){
+    // 停止 Mock 定时器
+    if (this.mockTimer !== -1) {
       clearInterval(this.mockTimer);
+      this.mockTimer = -1;
     }
-    if(this.netConnection){
-      this.netConnection.unregister((err) => {
-        Logger.info('Service', 'Unregister result:', err ?? 'Success');
-      });
+
+    // 停止真实网络监听
+    if (this.netConnection) {
+      this.netConnection.unregister((err) => {});
+      this.netConnection = null;
     }
-    this.speedEngine.stopTest(); // 停止测速
+
+    // 停止测速引擎, 断开 HTTP 连接
+    this.speedEngine.stopTest();
   }
 
   // 监控逻辑
@@ -228,27 +245,87 @@ export class NetMonitorService{
     Logger.info('Service', 'Starting Real Speed Engine...');
 
     this.speedEngine.startTest((speedKbps, progress) => {
-      // 这是引擎的回调，每 500ms 触发一次
-      // 从 AppStorage 取出当前的 NetInfo，更新速度字段，再存回去
-      // AppStorage.Get 返回的也有可能是 undefined
+      // 引擎的回调，每 500ms 触发一次
+      // 从 AppStorage 取出当前的 NetInfo，更新速度字段，再存回去，AppStorage.Get 返回的也有可能是 undefined
       let currentInfo = AppStorage.get<NetInfoModel>(APP_STORAGE_KEY_NET_INFO) || { ...DEFAULT_NET_INFO };
-
-      let newInfo: NetInfoModel = {
-        ...currentInfo,
-        linkDownSpeed: speedKbps, // 更新速度
-        isCongested: speedKbps < 100 // 阈值可以调低点方便测试
-      };
 
       // 更新下行速度
       currentInfo.linkDownSpeed = speedKbps;
 
       // 如果速度超过 50Mbps (50000kbps)，认为非常流畅，否则...
-      currentInfo.isCongested = speedKbps < 2000; // 低于 2Mbps 认为拥塞
+      if (speedKbps > 0 && speedKbps < 1000) {
+        currentInfo.isCongested = true;
+      } else {
+        currentInfo.isCongested = false;
+      }
 
       // 更新全局状态 -> UI 刷新
-      AppStorage.setOrCreate(APP_STORAGE_KEY_NET_INFO, newInfo);
+      AppStorage.setOrCreate(APP_STORAGE_KEY_NET_INFO, currentInfo);
 
+      // 持久化采样逻辑 (Throttling)
+      const now = Date.now();
+      if(now - this.lastSaveTime > this.SAVE_INTERVAL) {
+        this.saveHistoryRecord(currentInfo);
+        this.lastSaveTime = now;
+      }
       Logger.debug('Service', `Real Speed: ${speedKbps} kbps, Progress: ${progress}%`);
-    })
+    });
+  }
+
+  /**
+   * 切换模式 (Hot Swap)
+   * @param enableMock 是否开启 Mock 模式
+   */
+  public switchMode(enableMock: boolean): void {
+    if(this.isMockMode === enableMock) return;
+
+    Logger.info('Service', `Switching Mode to: ${enableMock ? 'MOCK' : 'REAL'}`);
+
+    // 更新状态
+    this.isMockMode = enableMock;
+    // 同步到 AppStorage，让 UI (SettingComponent) 的开关状态也能更新
+    AppStorage.setOrCreate(APP_STORAGE_KEY_IS_MOCK, enableMock);
+
+    // 重启服务 (Stop -> Start), 自动释放旧资源并启动新逻辑
+    this.startMonitor();
+  }
+
+  /**
+   * 异步写入数据库
+   */
+  private async saveHistoryRecord(info: NetInfoModel) {
+    // 只有在测速有数据时才存 (防止存一堆 0kbps)
+    if(info.linkDownSpeed <= 0) return;
+
+    await RdbManager.getInstance().insertRecord({
+      timestamp: Date.now(),
+      downSpeed: info.linkDownSpeed,
+      netType: info.netType,
+      isCongested: info.isCongested ? 1 : 0 // boolean 转 number
+    });
+    Logger.debug('Service', 'History record saved to DB');
+  }
+
+  /**
+   * 清理 1 年以前的历史数据
+   */
+  private async cleanOldData() {
+    try {
+      const now = new Date().getTime();
+      // 1年 = 365天  * 24小时 * ...
+      const oneYearsAgo = now - (365 * 24 * 60 * 60 * 1000);
+
+      const predicates = new relationalStore.RdbPredicates(HISTORY_TABLE.tableName);
+      // 删除 timestamp < oneYearsAgo
+      predicates.lessThan(HISTORY_TABLE.columns.TIMESTAMP, oneYearsAgo);
+
+      // 执行删除 (不阻塞主流程，异步执行)
+      const count = await RdbManager.getInstance().deleteRecords(predicates);
+      if (count > 0) {
+        Logger.info('Service', `Housekeeping: Cleaned ${count} old records.`);
+      }
+    } catch (e) {
+      Logger.error('Service', 'Auto clean failed', e);
+    }
   }
 }

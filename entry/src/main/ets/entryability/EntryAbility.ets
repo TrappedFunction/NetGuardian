@@ -2,6 +2,7 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { NetMonitorService } from '../service/NetMonitorService';
+import { RdbManager } from '../common/database/RdbManager';
 import Logger from '../common/utils/Logger';
 
 const DOMAIN = 0x0000;
@@ -15,8 +16,10 @@ export default class EntryAbility extends UIAbility {
     }
     Logger.info('EntryAbility', 'onCreate');
 
-    // 【点火】启动网络监听服务
-    // 保持 Mock 模式开启 (isMockMode = true)
+    // 初始化数据库
+    RdbManager.getInstance().init(this.context);
+
+    // 启动网络监听服务
     NetMonitorService.getInstance().startMonitor();
   }
 

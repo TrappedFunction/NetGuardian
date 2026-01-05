@@ -30,7 +30,7 @@ struct Index {
 
         // Tab 2: 历史
         TabContent() {
-          HistoryComponent()
+          HistoryComponent({ isSelected: this.currentIndex === 1 })
         }
 
         // Tab 3: 设置

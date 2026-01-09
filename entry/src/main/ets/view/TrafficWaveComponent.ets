@@ -1,5 +1,6 @@
 import { NetInfoModel, DEFAULT_NET_INFO } from '../model/NetInfoModel';
 import { APP_STORAGE_KEY_NET_INFO } from '../service/NetMonitorService';
+import { TestPhase } from '../service/SpeedTestEngine';
 import Logger from '../common/utils/Logger';
 
 @Component
@@ -35,8 +36,15 @@ export struct TrafficWaveComponent{
    * 逻辑：入队 -> 出队 -> 触发重绘
    */
   onDataUpdate(){
-    // 1. 获取最新下载速度
-    const speed = this.watchedNetInfo.linkDownSpeed;
+    let speed = 0;
+
+    // 根据阶段选择数据源
+    if (this.watchedNetInfo.testPhase === TestPhase.UPLOAD) {
+      speed = this.watchedNetInfo.linkUpSpeed;
+    } else {
+      // IDLE 或 DOWNLOAD 都显示下行
+      speed = this.watchedNetInfo.linkDownSpeed;
+    }
 
     // 2. 更新队列 (FIFO)
     this.dataQueue.push(speed);

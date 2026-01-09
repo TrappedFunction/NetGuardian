@@ -2,11 +2,43 @@ import { http } from '@kit.NetworkKit';
 import Logger from '../common/utils/Logger';
 
 /**
- * 测速回调接口定义
- * speedKbps: 当前瞬时速度 (kbps)
- * progress: 下载进度 (0-100)
+ * 测速阶段枚举
  */
-export type SpeedCallback = (speedKbps: number, progress: number) => void;
+export enum TestPhase {
+  IDLE, // 等待用户点击
+  DOWNLOAD, // 测下载，持续 N 秒或 N MB
+  UPLOAD, // 测上传，持续 N 秒
+  FINISHED // 生成本轮报告（Max/Min/Avg）
+}
+
+// PhaseStats 导出
+export interface PhaseStats {
+  max: number;
+  min: number;
+  avg: number;
+}
+
+/**
+ * 测速结果统计实体
+ */
+export interface SpeedStats {
+  currentKbps: number;
+  maxKbps: number;
+  minKbps: number;
+  avgKbps: number;
+  progress: number; // 0-100 (当前阶段的进度)
+  phase: TestPhase;
+}
+
+/**
+ * 测速回调接口定义
+ */
+export type SpeedCallback = (
+  currentKbps: number,
+  progress: number,
+  phase: TestPhase,
+  currentStats: PhaseStats // 当前阶段的实时统计
+) => void;
 
 /**
  * 真实网络测速引擎
@@ -17,16 +49,29 @@ export class SpeedTestEngine {
   private httpRequest: http.HttpRequest | null = null;
   private  isRunning: boolean = false;
 
+  private readonly UPLOAD_SIZE = 100 * 1024 * 1024;
+
   // 使用华为云测速源的 10MB - 100MB 文件
   // 备选：https://speed.cloudflare.com/__down?bytes=10000000
-  private readonly TARGET_URL = 'http://speedtest.tele2.net/10MB.zip';
+  private readonly DOWN_URL  = 'http://speedtest.tele2.net/100MB.zip';
+  // tele2 的测速接口
+  private readonly UP_URL = 'http://speedtest.tele2.net/upload.php';
 
   // 状态变量
   private totalBytesReceived: number = 0; // 总接收字节
   private totalFileSize: number = 0; // 文件总大小
 
+  // 统计相关变量
+  private samples: number[] = [];
+  private totalBytes: number = 0;
+  private startTime: number = 0;
+  private lastCalcTime: number = 0;
+  private cycleBytes: number = 0;
+
+  // 临时保存下载结果，以便最终汇总
+  private downResult: number = 0;
+
   // 瞬时速度计算相关变量
-  private lastCalcTime: number = 0; // 上次计算时间
   private cycleBytesReceived: number = 0; // 当前计算周期内累积的字节数
   private readonly CALC_INTERVAL = 500; // 计算间隔，单位ms
 
@@ -34,51 +79,32 @@ export class SpeedTestEngine {
   private onSpeedUpdate: SpeedCallback | null = null;
 
   /**
-   * 开始测速
+   * 启动完整测速流程 (Download -> Upload)
    * @param callback 速度更新回调
    */
-  public startTest(callback: SpeedCallback): void {
+  public async startTest(callback: SpeedCallback): Promise<void> {
     if(this.isRunning){
       Logger.warn('SpeedEngine', 'Test is already running.');
       return;
     }
 
     this.isRunning = true;
-    this.onSpeedUpdate = callback;
-    this.resetState();
+    // 1. 开始下载测试
+    Logger.info('SpeedEngine', '>>> Starting DOWNLOAD Phase <<<');
+    await this.runPhase(TestPhase.DOWNLOAD, callback);
 
-    this.httpRequest = http.createHttp();
-    Logger.info('SpeedEngine', 'Starting download test...');
+    // 稍微停顿，给 UI 喘息
+    await new Promise(r => setTimeout(r, 500));
 
-    // 订阅 HTTP 事件
-    this.subscribeEvents();
+    // 2. 开始上传测试
+    Logger.info('SpeedEngine', '>>> Starting UPLOAD Phase <<<');
+    await this.runPhase(TestPhase.UPLOAD, callback);
 
-    // 检查原 URL 是否已经包含 '?'
-    const separator = this.TARGET_URL.includes('?') ? '&' : '?';
-    // 添加时间戳防止缓存,来避开缓存
-    const finalUrl = `${this.TARGET_URL}${separator}t=${new Date().getTime()}`;
-
-    Logger.info('SpeedEngine', `Requesting: ${finalUrl}`);
-
-    // 发起请求
-    this.httpRequest.requestInStream(finalUrl, {
-      method: http.RequestMethod.GET,
-      // 必须指定接收类型为 ARRAY_BUFFER，否则二进制文件会转字符串导致崩溃
-      expectDataType: http.HttpDataType.ARRAY_BUFFER,
-      // 禁用系统缓存
-      usingCache: false,
-      priority: 1, // 高优先级
-      // 设置较大的超时时间
-      connectTimeout: 10000,
-      readTimeout: 60000
-    }).then((responseCode) => {
-      Logger.info('SpeedEngine', `Download finished with code: ${responseCode}`);
-      this.stopTest(); // 下载完自动停止
-    }).catch((err) => {
-      // 常见错误：如果是 SSL 错误，说明模拟器时间不对或证书问题
-      Logger.error('SpeedEngine', 'Download failed:', JSON.stringify(err));
-      this.stopTest();
-    });
+    // 3. 结束
+    Logger.info('SpeedEngine', 'Test Finished');
+    this.isRunning = false;
+    // 回调最后一次，Phase 设为 FINISHED
+    callback(0, 100, TestPhase.FINISHED, { max: 0, min: 0, avg: 0 });
   }
 
   /**
@@ -101,102 +127,138 @@ export class SpeedTestEngine {
       }
       this.httpRequest = null;
     }
+  }
 
-    // 最后回调一次 0，让 UI 归零
-    if(this.onSpeedUpdate){
-      this.onSpeedUpdate(0, 100);
-      this.onSpeedUpdate = null;
+  /**
+   * 执行单个阶段 (下载或上传)
+   * 逻辑：运行固定时长
+   */
+  private runPhase(phase: TestPhase, callback: SpeedCallback): Promise<void> {
+    return new Promise((resolve) => {
+      this.resetStats();
+      this.httpRequest = http.createHttp();
+
+      // 自动停止的定时器 (防止测太久)
+      const MAX_DURATION = 8000; // 8秒后强制结束本阶段
+      const timer = setTimeout(() => {
+        Logger.info('SpeedEngine', 'Phase timeout, finishing...');
+        this.finishPhase(resolve);
+      }, MAX_DURATION);
+
+      if (phase === TestPhase.DOWNLOAD) {
+        this.setupDownload(phase, callback);
+      } else {
+        this.setupUpload(phase, callback);
+      }
+
+      // 监听错误，防止卡死
+      this.httpRequest.on('headersReceive', () => {}); // 占位，防止报错
+    });
+  }
+
+  private setupDownload(phase: TestPhase, callback: SpeedCallback) {
+    const url = `${this.DOWN_URL}?t=${Date.now()}`;
+
+    // 订阅进度事件
+    this.httpRequest!.on('dataReceive', (data) => {
+      this.recordData(data.byteLength);
+      this.notifyStats(phase, callback);
+    });
+
+    this.httpRequest!.requestInStream(url, {
+      method: http.RequestMethod.GET,
+      connectTimeout: 100000,
+      readTimeout: 160000,
+      usingCache: false
+    }).then(() => {
+      // 下载自然结束
+    }).catch(e => {
+      Logger.error('SpeedEngine', 'Download error', e);
+    });
+  }
+
+  private setupUpload(phase: TestPhase, callback: SpeedCallback) {
+    // 生成一个 5MB 的垃圾数据用于上传
+    const dummyData = new ArrayBuffer(this.UPLOAD_SIZE);
+
+    // 监听上传进度
+    const url = `${this.UP_URL}?t=${Date.now()}`;
+    this.httpRequest!.request(url, {
+      method: http.RequestMethod.POST,
+      extraData: dummyData, // 上传数据
+      connectTimeout: 100000,
+      readTimeout: 160000,
+    }).then(() => {
+      // 上传完成
+    }).catch(e => {
+      Logger.error('SpeedEngine', 'Upload error', e);
+    });
+
+    this.httpRequest!.on('dataSendProgress', (data) => {
+      if (!this.isRunning) return; // 如果已经停止，忽略后续回调
+      // data.sendSize 是累计发送量, 将其视为 totalBytes，让 notifyStats 去计算时间差分
+      this.totalBytes = data.sendSize;
+      this.notifyStats(phase, callback);
+    });
+  }
+
+  private finishPhase(resolve: Function) {
+    if (this.httpRequest) {
+      this.httpRequest.destroy();
+      this.httpRequest = null;
     }
+    resolve();
   }
 
   /**
    * 重置状态
    */
-  private resetState(): void{
-    this.totalBytesReceived = 0;
-    this.totalFileSize = 0;
-    this.cycleBytesReceived = 0;
-    this.lastCalcTime = new Date().getTime();
+  private resetStats(): void{
+    this.samples = [];
+    this.totalBytes = 0;
+    this.startTime = Date.now();
+    this.lastCalcTime = this.startTime;
+    this.cycleBytes = 0;
   }
 
-  /**
-   * 订阅 HTTP 流事件
-   */
-  private subscribeEvents(): void {
-    if(!this.httpRequest) return;
-
-    // 监听下载进度
-    this.httpRequest.on('dataReceiveProgress', (data: http.DataReceiveProgressInfo) => {
-      if (!this.isRunning) return;
-      // data.downloadSize: 已经下载的字节数
-      // data.totalSize: 总字节数 (如果服务器没返回 content-length，这里可能是 -1)
-      // 更新总大小，供计算百分比使用
-      if (data.totalSize > 0) {
-        this.totalFileSize = data.totalSize;
-      }
-      // 校准 totalBytesReceived，防止丢包导致的计数偏差
-      this.totalBytesReceived = data.receiveSize;
-    });
-
-    // 监听数据流
-    // data 是 ArrayBuffer
-    this.httpRequest.on('dataReceive', (data: ArrayBuffer) => {
-      // 如果这行日志没出来，说明系统根本没给数据
-      // Logger.debug('SpeedEngine', `Chunk received: ${data.byteLength} bytes`);
-
-      if(!this.isRunning) return;
-
-      const currentBytes = data.byteLength;
-      this.totalBytesReceived += currentBytes;
-      this.cycleBytesReceived += currentBytes;
-
-      // 尝试计算瞬时速度
-      this.tryCalculateSpeed();
-    });
+  private recordData(byteLength: number) {
+    this.totalBytes += byteLength;
+    this.cycleBytes += byteLength;
   }
 
-  /**
-   * 计算瞬时速度 (Time Window Aggregation Algorithm)
-   */
+  private notifyStats(phase: TestPhase, callback: SpeedCallback) {
+    const now = Date.now();
+    const diff = now - this.lastCalcTime;
+    if (diff < 500) return; // 500ms 刷新一次
 
-  private tryCalculateSpeed(): void{
-    const now = new Date().getTime();
-    const timeDiff = now - this.lastCalcTime;
+    // 计算瞬时速度 (针对下载)
+    let instantBps = 0;
 
-    // 查看累积情况
-    // Logger.debug('SpeedEngine', `TimeDiff: ${timeDiff}ms, CycleBytes: ${this.cycleBytesReceived}`);
-
-    // 如果距离上次计算不足 500ms，则只累积数据，不计算，减少 CPU 消耗和 UI 刷新频率
-    if(timeDiff < this.CALC_INTERVAL){return;}
-
-    // 计算这 500ms 内收到的 bits
-    // 1 Byte = 8 bits
-    const bitsReceived = this.cycleBytesReceived * 8;
-
-    // 计算速度 (bps = bits per second)
-    // speed_bps = bits / (time_ms / 1000)
-    const speedBps = (bitsReceived / timeDiff) * 1000;
-
-    // 转换为 kbps
-    const speedKbps = Math.floor(speedBps / 1024);
-
-    // 计算进度
-    let progress = 0;
-    if (this.totalFileSize > 0) {
-      progress = Math.floor((this.totalBytesReceived / this.totalFileSize) * 100);
+    if (phase === TestPhase.DOWNLOAD) {
+      // 下载逻辑：依靠 cycleBytes (增量)
+      instantBps = (this.cycleBytes * 8) / (diff / 1000);
+    } else {
+      instantBps = (this.totalBytes * 8) / ((now - this.startTime) / 1000); // 这是平均速度，上传瞬时较难获取
     }
 
-    // 看到这行日志，UI 才会动
-    // Logger.info('SpeedEngine', `UPDATE -> Speed: ${speedKbps} kbps, Progress: ${progress}%`);
+    let instantKbps = Math.floor(instantBps / 1024);
+    if (instantKbps > 0) this.samples.push(instantKbps);
 
-    // 回调给 Service
-    if (this.onSpeedUpdate) {
-      this.onSpeedUpdate(speedKbps, progress);
-    }
+    // --- 计算实时统计 ---
+    const max = this.samples.length > 0 ? Math.max(...this.samples) : 0;
+    const min = this.samples.length > 5 ? Math.min(...this.samples.slice(2)) : 0;
+    const totalDuration = (now - this.startTime) / 1000;
+    const avg = totalDuration > 0 ? Math.floor((this.totalBytes * 8 / 1024) / totalDuration) : 0;
 
-    // 重置周期状态，开启下一个时间窗口
+    // --- 回调 ---
+    callback(
+      instantKbps,
+      Math.min(100, Math.floor(totalDuration / 8 * 100)), // 假定8秒进度
+      phase,
+      { max, min, avg } // 传出当前统计
+    );
+
     this.lastCalcTime = now;
-    this.cycleBytesReceived = 0;
+    this.cycleBytes = 0;
   }
-
 }

@@ -7,12 +7,8 @@ interface OptionItem {
 export struct ClearHistoryDialog {
   // 弹窗控制器，由系统自动注入
   controller: CustomDialogController;
-  // 回调函数，把用户的选择传出去
+  // 回调函数，把用户的选择传出去；非空断言符号！，确认回调会被正确初始化
   onConfirm!: (type: number) => void;
-
-
-
-
 
   // 选项配置
   private options: OptionItem[] = [

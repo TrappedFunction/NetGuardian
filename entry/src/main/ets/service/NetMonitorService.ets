@@ -1,7 +1,7 @@
 import connection from '@ohos.net.connection';
 import Logger from '../common/utils/Logger';
-import {NetInfoModel, DEFAULT_NET_INFO} from '../model/NetInfoModel';
-import { SpeedTestEngine, TestPhase, PhaseStats, SpeedCallback } from './SpeedTestEngine';
+import { createDefaultNetInfo, NetInfoModel, PhaseStats } from '../model/NetInfoModel';
+import { SpeedTestEngine, TestPhase } from './SpeedTestEngine';
 import { RdbManager } from '../common/database/RdbManager';
 import relationalStore from '@ohos.data.relationalStore';
 import { HISTORY_TABLE } from '../model/HistoryRecord';
@@ -42,7 +42,7 @@ export class NetMonitorService{
   private constructor() {
     Logger.info('Service', 'Initializing NetMonitorService...');
     // 初始化全局状态，确保 UI 绑定时有默认值
-    AppStorage.setOrCreate(APP_STORAGE_KEY_NET_INFO, DEFAULT_NET_INFO);
+    AppStorage.setOrCreate(APP_STORAGE_KEY_NET_INFO, createDefaultNetInfo());
     AppStorage.setOrCreate(APP_STORAGE_KEY_SPEED_TEST_ENABLED, this.isSpeedTestEnabled);
   }
 
@@ -114,13 +114,15 @@ export class NetMonitorService{
   private async refreshBasicInfo(handle: connection.NetHandle) {
     try {
       // 获取当前 AppStorage 中的数据副本 (保留之前的测速结果，只更新基础信息)
-      let currentInfo = AppStorage.Get<NetInfoModel>(APP_STORAGE_KEY_NET_INFO) || { ...DEFAULT_NET_INFO };
-
+      let oldInfo = AppStorage.get<NetInfoModel>(APP_STORAGE_KEY_NET_INFO) || createDefaultNetInfo();
+      let currentInfo = oldInfo.clone();
       // 获取系统底层信息
-      const [cap, props] = await Promise.all([
+      const GeneratedDestructArray_1 = await Promise.all([
         connection.getNetCapabilities(handle),
         connection.getConnectionProperties(handle)
       ]);
+      const cap = GeneratedDestructArray_1[0];
+      const props = GeneratedDestructArray_1[1];
 
       // 更新基础字段
       currentInfo.ipAddress = props.linkAddresses?.[0]?.address?.address || '0.0.0.0';
@@ -152,7 +154,7 @@ export class NetMonitorService{
   }
 
   private updateToLostState() {
-    let currentInfo = AppStorage.get<NetInfoModel>(APP_STORAGE_KEY_NET_INFO) || { ...DEFAULT_NET_INFO };
+    let currentInfo = new NetInfoModel();
     currentInfo.netType = '无网络';
     currentInfo.ipAddress = '0.0.0.0';
     AppStorage.setOrCreate(APP_STORAGE_KEY_NET_INFO, currentInfo);
@@ -179,9 +181,10 @@ export class NetMonitorService{
   }
 
   private resetTestResult() {
-    let currentInfo = AppStorage.get<NetInfoModel>(APP_STORAGE_KEY_NET_INFO) || { ...DEFAULT_NET_INFO };
-    currentInfo.downStats = { max: 0, min: 0, avg: 0 };
-    currentInfo.upStats = { max: 0, min: 0, avg: 0 };
+    let oldInfo = AppStorage.get<NetInfoModel>(APP_STORAGE_KEY_NET_INFO) || createDefaultNetInfo();
+    let currentInfo = oldInfo.clone();
+    currentInfo.downMax = 0; currentInfo.downMin = 0; currentInfo.downAvg = 0;
+    currentInfo.upMax = 0; currentInfo.upMin = 0; currentInfo.upAvg = 0;
     currentInfo.hasFinishedTest = false;
     AppStorage.setOrCreate(APP_STORAGE_KEY_NET_INFO, currentInfo);
   }
@@ -191,9 +194,7 @@ export class NetMonitorService{
    */
   private handleSpeedCallback(currentKbps: number, progress: number, phase: TestPhase, stats: PhaseStats) {
     // 获取当前数据副本
-    let oldInfo  = AppStorage.get<NetInfoModel>(APP_STORAGE_KEY_NET_INFO) || { ...DEFAULT_NET_INFO };
-
-    let currentInfo = { ...oldInfo };
+    let currentInfo = AppStorage.get<NetInfoModel>(APP_STORAGE_KEY_NET_INFO) || createDefaultNetInfo();
 
     // 同步阶段和进度
     currentInfo.testPhase = phase;
@@ -204,14 +205,18 @@ export class NetMonitorService{
       currentInfo.linkDownSpeed = currentKbps;
       currentInfo.linkUpSpeed = 0;
       // 更新下载统计
-      currentInfo.downStats = { ...stats };
+      currentInfo.downMax = stats.max;
+      currentInfo.downMin = stats.min;
+      currentInfo.downAvg = stats.avg;
       // 拥塞判断
       currentInfo.isCongested = (currentKbps > 0 && currentKbps < 500);
     } else if (phase === TestPhase.UPLOAD) {
       currentInfo.linkDownSpeed = 0; // 或者保持下载均值，看你UI设计
       currentInfo.linkUpSpeed = currentKbps;
       // 更新上传统计
-      currentInfo.upStats = { ...stats };
+      currentInfo.upMax = stats.max;
+      currentInfo.upMin = stats.min;
+      currentInfo.upAvg = stats.avg;
       currentInfo.isCongested = false; // 上传不判拥塞
     }
 
@@ -226,15 +231,13 @@ export class NetMonitorService{
       this.saveHistoryRecord(currentInfo);
     }
 
-    currentInfo = {...currentInfo};
-
     // 刷新 UI
     AppStorage.setOrCreate(APP_STORAGE_KEY_NET_INFO, currentInfo);
 
   }
 
   private resetSpeedState() {
-    let currentInfo = AppStorage.get<NetInfoModel>(APP_STORAGE_KEY_NET_INFO) || { ...DEFAULT_NET_INFO };
+    let currentInfo = new NetInfoModel();
     currentInfo.testPhase = TestPhase.IDLE;
     currentInfo.linkDownSpeed = 0;
     currentInfo.linkUpSpeed = 0;
@@ -248,7 +251,7 @@ export class NetMonitorService{
    */
   private async saveHistoryRecord(info: NetInfoModel) {
     // 读取 downStats.avg
-    const finalDownSpeed = info.downStats.avg;
+    const finalDownSpeed = info.downAvg;
 
     // 防御性检查：如果速度为0，说明可能测速失败或中断，不存
     if (finalDownSpeed <= 0) {

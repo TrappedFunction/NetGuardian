@@ -1,6 +1,6 @@
 // 仪表盘组件
 import Logger from '../common/utils/Logger'
-import { NetInfoModel, DEFAULT_NET_INFO, PhaseStats } from '../model/NetInfoModel';
+import { createDefaultNetInfo, NetInfoModel, PhaseStats } from '../model/NetInfoModel';
 import {
   APP_STORAGE_KEY_NET_INFO,
   APP_STORAGE_KEY_SPEED_TEST_ENABLED } from '../service/NetMonitorService';
@@ -8,6 +8,7 @@ import { InfoItemComponent } from './InfoItemComponent'
 import { TrafficWaveComponent } from './TrafficWaveComponent';
 import { NetMonitorService } from '../service/NetMonitorService';
 import { TestPhase } from '../service/SpeedTestEngine';
+
 
 @Component
 export struct DashboardComponent{
@@ -17,7 +18,7 @@ export struct DashboardComponent{
    * 当 Service 层修改 AppStorage 中的数据时，这里会自动更新。
    * 不需要在 UI 层修改网络数据（网络数据是只读的），所以用 Prop 而不是 Link。
    */
-  @StorageProp(APP_STORAGE_KEY_NET_INFO) netInfo: NetInfoModel = DEFAULT_NET_INFO;
+  @StorageProp(APP_STORAGE_KEY_NET_INFO) netInfo: NetInfoModel = createDefaultNetInfo();
 
   // 监听功能开关 (是否显示测速入口)
   @StorageProp(APP_STORAGE_KEY_SPEED_TEST_ENABLED) isSpeedTestEnabled: boolean = true;
@@ -45,7 +46,7 @@ export struct DashboardComponent{
 
           // 统计报告卡片 (只有测过才有数据)
           if (this.netInfo.testPhase !== TestPhase.IDLE || this.netInfo.hasFinishedTest) {
-            this.buildFullReportCard(this.netInfo.downStats, this.netInfo.upStats)
+            this.buildReportCard()
           }
 
           // 详细数据网格 (Detail Grid)
@@ -109,7 +110,7 @@ export struct DashboardComponent{
 
       case TestPhase.FINISHED:
         // 【修复】：引用 downStats.avg (以所测下载均值为准)
-        return `平均下载: ${this.netInfo.downStats.avg} kbps`;
+        return `平均下载: ${this.netInfo.downAvg} kbps`;
 
       default:
         return '等待测速';
@@ -228,34 +229,73 @@ export struct DashboardComponent{
     .animation({ duration: 300, curve: Curve.EaseInOut })
   }
 
-  /**
-   * 统计报告卡片 (Max/Min/Avg)
-   */
   @Builder
-  buildFullReportCard(downStats: PhaseStats, upStats: PhaseStats) {
+  buildReportCard() {
     Column() {
       Text('本轮测速报告 (Detailed Report)')
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
         .fontColor('#182431')
-        .margin({ bottom: 16 }) // 增加间距
+        .margin({ bottom: 16 })
         .width('100%')
 
       Row() {
-        // 左列：下载数据 (绿色)
-        this.buildStatColumn('下载 (Download)', downStats, '#00C853')
+        // --- 左列：下载 ---
+        Column() {
+          Text('下载 (Download)')
+            .fontSize(14)
+            .fontColor('#00C853')
+            .fontWeight(FontWeight.Bold)
+            .margin({ bottom: 12 })
 
-        // 中间分割线
-        Divider()
-          .vertical(true)
-          .height(50) // 调整高度适配内容
-          .color('#E0E0E0')
+          StatRowComponent({
+            label: '最高',
+            value: this.netInfo.downMax,
+            color: '#00C853'
+          })
+          StatRowComponent({
+            label: '平均',
+            value: this.netInfo.downAvg,
+            color: '#00C853'
+          })
+          StatRowComponent({
+            label: '最低',
+            value: this.netInfo.downMin,
+            color: '#00C853'
+          })
+        }
+        .width('40%')
 
-        // 右列：上传数据 (紫色)
-        this.buildStatColumn('上传 (Upload)', upStats, '#6200EA')
+        Divider().vertical(true).height(50).color('#E0E0E0')
+
+        // --- 右列：上传 ---
+        Column() {
+          Text('上传 (Upload)')
+            .fontSize(14)
+            .fontColor('#6200EA')
+            .fontWeight(FontWeight.Bold)
+            .margin({ bottom: 12 })
+
+          StatRowComponent({
+            label: '最高',
+            value: this.netInfo.upMax,
+            color: '#6200EA'
+          })
+          StatRowComponent({
+            label: '平均',
+            value: this.netInfo.upAvg,
+            color: '#6200EA'
+          })
+          StatRowComponent({
+            label: '最低',
+            value: this.netInfo.upMin,
+            color: '#6200EA'
+          })
+        }
+        .width('40%')
       }
       .width('100%')
-      .justifyContent(FlexAlign.SpaceEvenly) // 均匀分布
+      .justifyContent(FlexAlign.SpaceEvenly)
     }
     .width('92%')
     .padding(16)
@@ -263,50 +303,6 @@ export struct DashboardComponent{
     .borderRadius(16)
     .margin({ top: 16 })
     .shadow({ radius: 8, color: '#0D000000', offsetY: 2 })
-  }
-
-  @Builder
-  buildStatColumn(title: string, stats: PhaseStats, color: string) {
-    Column() {
-      // 标题
-      Text(title)
-        .fontSize(14)
-        .fontColor(color)
-        .fontWeight(FontWeight.Bold)
-        .margin({ bottom: 12 })
-
-      // 详细数据行
-      // 这里直接传 stats 对象里的具体数值，确保值是基本类型，容易触发更新
-      this.buildMiniRow('最高', stats.max, color)
-      this.buildMiniRow('平均', stats.avg, color)
-      this.buildMiniRow('最低', stats.min, color)
-    }
-    .width('40%') // 限制宽度
-  }
-
-  @Builder
-  buildMiniRow(label: string, value: number, color: string) {
-    Row() {
-      Text(label)
-        .fontSize(12)
-        .fontColor('#999999')
-
-      Blank()
-
-      // 拼接单位 kbps
-      Text(`${value}`)
-        .fontSize(14)
-        .fontWeight(FontWeight.Bolder)
-        .fontColor('#182431')
-
-      Text(' kbps')
-        .fontSize(10)
-        .fontColor('#999999')
-        .margin({ left: 2, top: 2 }) // 微调对齐
-    }
-    .width('100%')
-    .margin({ bottom: 6 }) // 行间距
-    .alignItems(VerticalAlign.Bottom) // 底部对齐
   }
 
   /**
@@ -349,4 +345,34 @@ export struct DashboardComponent{
     .height(180) // 固定高度，防止被内容撑乱
   }
 
+}
+
+@Component
+struct StatRowComponent {
+  @Prop label: string;
+  @Prop value: number;
+  @Prop color: string;
+
+  build() {
+    Row() {
+      Text(this.label)
+        .fontSize(12)
+        .fontColor('#999999')
+
+      Blank()
+
+      Text(`${this.value}`)
+        .fontSize(14)
+        .fontWeight(FontWeight.Bolder)
+        .fontColor('#182431')
+
+      Text(' kbps')
+        .fontSize(10)
+        .fontColor('#999999')
+        .margin({ left: 2, top: 2 })
+    }
+    .width('100%')
+    .margin({ bottom: 6 })
+    .alignItems(VerticalAlign.Bottom)
+  }
 }

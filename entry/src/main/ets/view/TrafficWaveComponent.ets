@@ -1,4 +1,4 @@
-import { NetInfoModel, DEFAULT_NET_INFO } from '../model/NetInfoModel';
+import { createDefaultNetInfo, NetInfoModel } from '../model/NetInfoModel';
 import { APP_STORAGE_KEY_NET_INFO } from '../service/NetMonitorService';
 import { TestPhase } from '../service/SpeedTestEngine';
 import Logger from '../common/utils/Logger';
@@ -6,7 +6,7 @@ import Logger from '../common/utils/Logger';
 @Component
 export struct TrafficWaveComponent{
   // 订阅网络数据
-  @StorageProp(APP_STORAGE_KEY_NET_INFO) netInfo: NetInfoModel = DEFAULT_NET_INFO;
+  @StorageLink(APP_STORAGE_KEY_NET_INFO) netInfo: NetInfoModel = createDefaultNetInfo();
 
   // Canvas 上下文配置
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -22,7 +22,7 @@ export struct TrafficWaveComponent{
 
   // 监听 netInfo 变化，驱动重绘
   // @Watch 装饰器：当 netInfo 变化时，执行 onDataUpdate 方法
-  @StorageProp(APP_STORAGE_KEY_NET_INFO) @Watch('onDataUpdate') watchedNetInfo: NetInfoModel = DEFAULT_NET_INFO;
+  @StorageProp(APP_STORAGE_KEY_NET_INFO) @Watch('onDataUpdate') watchedNetInfo: NetInfoModel = createDefaultNetInfo();
 
   aboutToAppear(): void {
     // 初始化队列，填满 0，防止刚开始画不出线

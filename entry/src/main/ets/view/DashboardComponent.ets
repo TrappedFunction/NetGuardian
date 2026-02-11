@@ -13,7 +13,6 @@ import { TestPhase } from '../service/SpeedTestEngine';
 @Component
 export struct DashboardComponent{
   /**
-   * 【核心绑定】
    * @StorageProp: 单向同步。
    * 当 Service 层修改 AppStorage 中的数据时，这里会自动更新。
    * 不需要在 UI 层修改网络数据（网络数据是只读的），所以用 Prop 而不是 Link。
@@ -110,7 +109,7 @@ export struct DashboardComponent{
 
       case TestPhase.FINISHED:
         // 【修复】：引用 downStats.avg (以所测下载均值为准)
-        return `平均下载: ${this.netInfo.downAvg} kbps`;
+        return `平均下载: ${this.netInfo.downStats.avg} kbps`;
 
       default:
         return '等待测速';
@@ -248,21 +247,9 @@ export struct DashboardComponent{
             .fontWeight(FontWeight.Bold)
             .margin({ bottom: 12 })
 
-          StatRowComponent({
-            label: '最高',
-            value: this.netInfo.downMax,
-            color: '#00C853'
-          })
-          StatRowComponent({
-            label: '平均',
-            value: this.netInfo.downAvg,
-            color: '#00C853'
-          })
-          StatRowComponent({
-            label: '最低',
-            value: this.netInfo.downMin,
-            color: '#00C853'
-          })
+          StatRowComponent({ label: '最高', value: this.netInfo.downStats.max, color: '#00C853' })
+          StatRowComponent({ label: '平均', value: this.netInfo.downStats.avg, color: '#00C853' })
+          StatRowComponent({ label: '最低', value: this.netInfo.downStats.min, color: '#00C853' })
         }
         .width('40%')
 
@@ -276,21 +263,9 @@ export struct DashboardComponent{
             .fontWeight(FontWeight.Bold)
             .margin({ bottom: 12 })
 
-          StatRowComponent({
-            label: '最高',
-            value: this.netInfo.upMax,
-            color: '#6200EA'
-          })
-          StatRowComponent({
-            label: '平均',
-            value: this.netInfo.upAvg,
-            color: '#6200EA'
-          })
-          StatRowComponent({
-            label: '最低',
-            value: this.netInfo.upMin,
-            color: '#6200EA'
-          })
+          StatRowComponent({ label: '最高', value: this.netInfo.upStats.max, color: '#6200EA' })
+          StatRowComponent({ label: '平均', value: this.netInfo.upStats.avg, color: '#6200EA' })
+          StatRowComponent({ label: '最低', value: this.netInfo.upStats.min, color: '#6200EA' })
         }
         .width('40%')
       }

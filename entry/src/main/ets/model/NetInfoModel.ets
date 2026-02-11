@@ -6,7 +6,6 @@ import { TestPhase } from '../service/SpeedTestEngine';
 import { INetInfo, IPhaseStats } from './INetInfo';
 
 // 定义一个小的统计结构体
-@Observed
 export class PhaseStats implements IPhaseStats {
   public max: number;
   public min: number;
@@ -29,13 +28,8 @@ export class NetInfoModel implements INetInfo {
   linkDownSpeed: number = 0;
   linkUpSpeed: number = 0;
 
-  downMax: number = 0;
-  downMin: number = 0;
-  downAvg: number = 0;
-
-  upMax: number = 0;
-  upMin: number = 0;
-  upAvg: number = 0;
+  downStats: PhaseStats;
+  upStats: PhaseStats;
 
   testPhase: TestPhase = TestPhase.IDLE;
   testProgress: number = 0;
@@ -48,6 +42,8 @@ export class NetInfoModel implements INetInfo {
   lastTestAvg: number = 0;
 
   constructor() {
+    this.downStats = new PhaseStats(); // 初始化好了
+    this.upStats = new PhaseStats();
   }
 
   clone(): NetInfoModel {
@@ -63,14 +59,6 @@ export class NetInfoModel implements INetInfo {
     // 瞬时速度
     target.linkDownSpeed = this.linkDownSpeed;
     target.linkUpSpeed = this.linkUpSpeed;
-
-    // 统计信息
-    target.downMax = this.downMax;
-    target.downMin = this.downMin;
-    target.downAvg = this.downAvg;
-    target.upMax = this.upMax;
-    target.upMin = this.upMin;
-    target.upAvg = this.upAvg;
 
     // 状态
     target.testPhase = this.testPhase;

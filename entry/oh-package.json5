@@ -5,6 +5,7 @@
   "main": "",
   "author": "",
   "license": "",
-  "dependencies": {}
+  "dependencies": {
+    "libnet_guardian.so": "file:./src/main/cpp/types/libnet_guardian"
+  }
 }
-

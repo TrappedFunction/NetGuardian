@@ -2,6 +2,7 @@ import { createDefaultNetInfo, NetInfoModel } from '../model/NetInfoModel';
 import { APP_STORAGE_KEY_NET_INFO } from '../service/NetMonitorService';
 import { TestPhase } from '../service/SpeedTestEngine';
 import Logger from '../common/utils/Logger';
+import nativeGuardian from 'libnet_guardian.so';
 
 @Component
 export struct TrafficWaveComponent{
@@ -139,22 +140,19 @@ export struct TrafficWaveComponent{
         .margin({bottom: 8})
 
       // 画布容器
-      Canvas(this.context)
+      XComponent({
+        id: 'NetGuardian_Waveform',
+        type: XComponentType.SURFACE, // 必须是 SURFACE，表示独占一块缓冲区
+        libraryname: 'net_guardian' // 对应 libnet_guardian.so (去掉lib和.so)
+      })
         .width('100%')
         .height(120)
-        .backgroundColor(Color.White)
         .borderRadius(12)
-        .shadow({ radius: 4, color: '#10000000', offsetY: 2 })
-        .onReady(() => {
-          // Canvas 准备好了
-          Logger.info('Wave', 'Canvas Ready');
+        .onLoad((context) => {
+          Logger.info('Wave', 'XComponent onLoad: Surface creation triggered internally');
         })
-        .onAreaChange((oldValue, newValue) => {
-          // 获取真实的宽高，用于绘图计算
-          this.canvasWidth = Number(newValue.width);
-          this.canvasHeight = Number(newValue.height);
-          // 尺寸变化后立即重绘一次
-          this.drawWave();
+        .onDestroy(() => {
+          Logger.info('Wave', 'XComponent onDestroy');
         })
     }
     .padding({ left: 16, right: 16, top: 10 })

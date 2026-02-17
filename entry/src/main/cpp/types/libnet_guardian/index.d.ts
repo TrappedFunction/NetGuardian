@@ -10,3 +10,4 @@ export interface TrafficStats {
 export const analyzeTraffic: (buffer: ArrayBuffer) => TrafficStats;
 export const analyzeLength: (byteLength: number) => TrafficStats;
 export const resetState: () => void;
+// export const registerXComponent: (context: object) => void;

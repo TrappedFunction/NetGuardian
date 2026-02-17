@@ -50,7 +50,7 @@ export class SpeedTestEngine {
   private httpRequest: http.HttpRequest | null = null;
   private  isRunning: boolean = false;
 
-  private readonly UPLOAD_SIZE = 10 * 1024 * 1024;
+  private readonly UPLOAD_SIZE = 100 * 1024 * 1024;
 
   // 使用华为云测速源的 10MB - 100MB 文件
   // 备选：https://speed.cloudflare.com/__down?bytes=10000000
@@ -204,7 +204,7 @@ export class SpeedTestEngine {
           this.cycleBytes += data.byteLength;
           this.notifyStats(phase, callback, stats);
 
-          Logger.debug('Native', `Jitter: ${stats.jitter.toFixed(2)}, Avg: ${stats.avgKbps.toFixed(2)}`);
+          // Logger.debug('Native', `Jitter: ${stats.jitter.toFixed(2)}, Avg: ${stats.avgKbps.toFixed(2)}`);
         }
       } catch (e) {
         Logger.error('SpeedEngine', 'Native call failed', e);

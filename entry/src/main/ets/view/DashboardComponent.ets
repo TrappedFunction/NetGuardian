@@ -290,18 +290,6 @@ export struct DashboardComponent{
       // 使用 GridItem 封装每个数据块
       GridItem() {
         InfoItemComponent({
-          title: 'IP 地址',
-          value: this.netInfo.ipAddress
-        })
-      }
-      GridItem() {
-        InfoItemComponent({
-          title: '默认网关',
-          value: this.netInfo.gateway
-        })
-      }
-      GridItem() {
-        InfoItemComponent({
           title: '下行速率',
           value: `${this.netInfo.linkDownSpeed} kbps`
         })
@@ -312,6 +300,19 @@ export struct DashboardComponent{
           value: `${this.netInfo.linkUpSpeed} kbps`
         })
       }
+      GridItem() {
+        InfoItemComponent({
+          title: 'IP 地址',
+          value: this.netInfo.ipAddress
+        })
+      }
+      GridItem() {
+        InfoItemComponent({
+          title: '默认网关',
+          value: this.netInfo.gateway
+        })
+      }
+
     }
     .columnsTemplate('1fr 1fr') // 两列等宽
     .rowsGap(12)

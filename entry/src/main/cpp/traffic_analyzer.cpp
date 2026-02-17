@@ -1,4 +1,5 @@
 #include "napi/native_api.h"
+#include "render_manager.h"
 #include <hilog/log.h>
 #include <vector>
 #include <deque>
@@ -12,6 +13,7 @@
 #define LOG_TAG "NativeTraffic"
 #define LOG_DOMAIN 0x0001
 #define OH_LOG_INFO(fmt, ...) ((void)OH_LOG_Print(LOG_APP, LOG_INFO, LOG_DOMAIN, LOG_TAG, fmt, ##__VA_ARGS__))
+#define OH_LOG_ERROR(fmt, ...) ((void)OH_LOG_Print(LOG_APP, LOG_ERROR, LOG_DOMAIN, LOG_TAG, fmt, ##__VA_ARGS__))
 
 static const size_t WINDOW_SIZE = 100; // 窗口大小
 static std::deque<double> g_speedWindow; // 存储最近N次瞬时速度（kbps）
@@ -39,6 +41,11 @@ static napi_value ResetState(napi_env env, napi_callback_info info) {
     auto now = std::chrono::steady_clock::now();
     g_lastPacketTime = now;
     g_sessionStartTime = now;
+    
+
+    RenderManager::GetInstance()->ClearData();
+
+    
     OH_LOG_INFO("Traffic Analyzer State Reset");
     return nullptr;
 }
@@ -127,6 +134,8 @@ static napi_value ProcessTrafficCore(napi_env env, size_t byteLength) {
     // 瞬时速度
     double currentBits = g_accumulatedBytes * 8.0;
     double instantKbps = (currentBits / duration_sec) / 1024.0;
+
+    RenderManager::GetInstance()->PushData(instantKbps);
 
     // 更新 Max
     if (instantKbps > g_globalMax) {
@@ -221,9 +230,30 @@ static napi_value Init(napi_env env, napi_value exports){
     napi_property_descriptor desc[] = {
         { "analyzeTraffic", nullptr, AnalyzeTraffic, nullptr, nullptr, nullptr, napi_default, nullptr},
         { "analyzeLength", nullptr, AnalyzeLength, nullptr, nullptr, nullptr, napi_default, nullptr },
-        { "resetState", nullptr, ResetState, nullptr, nullptr, nullptr, napi_default, nullptr }
+        { "resetState", nullptr, ResetState, nullptr, nullptr, nullptr, napi_default, nullptr },
+//        { "registerXComponent", nullptr, RegisterXComponent, nullptr, nullptr, nullptr, napi_default, nullptr }
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
+    
+    // 当 ArkTS 设置了 libraryname 时，系统会把 NativeXComponent 挂载在 exports 上
+    napi_value exportInstance = nullptr;
+    napi_status status = napi_get_named_property(env, exports, OH_NATIVE_XCOMPONENT_OBJ, &exportInstance);
+    
+    if(status == napi_ok) {
+        OH_NativeXComponent* nativeXComponent = nullptr;
+        // 解包出指针
+        status = napi_unwrap(env, exportInstance, reinterpret_cast<void**>(&nativeXComponent));
+        
+        if(status == napi_ok && nativeXComponent != nullptr) {
+            OH_LOG_INFO("Successfully retrieved OH_NativeXComponent pointer!");
+            
+            // 立即注册回调
+            RenderManager::GetInstance()->SetId("NetGuardian_Waveform");
+            RenderManager::GetInstance()->RegisterCallback(nativeXComponent);
+        } else {
+            OH_LOG_ERROR("Failed to unwrap OH_NativeXComponent");
+        }
+    }
     return exports;
 }
 EXTERN_C_END
